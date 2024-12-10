@@ -1,13 +1,19 @@
 import { Component } from '@angular/core';
-import { RouterOutlet } from '@angular/router';
+import { ThreeModelViewerComponent } from './three-model-viewer/three-model-viewer.component';
 
 @Component({
   selector: 'app-root',
   standalone: true,
-  imports: [RouterOutlet],
-  templateUrl: './app.component.html',
-  styleUrl: './app.component.scss'
+  imports: [ThreeModelViewerComponent],
+  template: `
+    <app-three-model-viewer 
+      [baseModelPath]="'assets/models/Anatomy.glb'"
+      [animationFiles]="[
+        'assets/models/Push Up Animation.glb',
+        'assets/models/Squat Animation.glb'
+      ]"
+      [animationNames]="['Push Up Animation', 'Squat']"
+    ></app-three-model-viewer>
+  `
 })
-export class AppComponent {
-  title = 'threejs-animation';
-}
+export class AppComponent {}
