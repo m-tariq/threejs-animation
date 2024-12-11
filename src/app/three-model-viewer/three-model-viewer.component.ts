@@ -1,14 +1,14 @@
-import { 
-  Component, 
-  AfterViewInit, 
-  OnDestroy, 
-  ElementRef, 
-  ViewChild, 
+import {
+  Component,
+  AfterViewInit,
+  OnDestroy,
+  ElementRef,
+  ViewChild,
   input
 } from '@angular/core';
 import { NgFor } from '@angular/common';
 import * as THREE from 'three';
-import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { GLTFLoader, GLTF } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 
 @Component({
@@ -19,14 +19,18 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
     <div class="model-viewer-container">
       <canvas #modelCanvas></canvas>
       <div class="controls">
-        @for (animation of animationNames(); track $index) {
-          <button 
-            class="control-button"
-            (click)="playAnimation($index)"
-          >
-            Play {{ animation }}
-          </button>
-        }
+        <button 
+          class="control-button"
+          (click)="loadAndPlayModel(1)"
+        >
+          Play Squat Animation
+        </button>
+        <button 
+          class="control-button"
+          (click)="loadAndPlayModel(2)"
+        >
+          Play Push-up Animation
+        </button>
       </div>
     </div>
   `,
@@ -79,10 +83,9 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
   `]
 })
 export class ThreeModelViewerComponent implements AfterViewInit, OnDestroy {
-  // Inputs
-  public baseModelPath = input<string>('');
-  public animationFiles = input<string[]>([]);
-  public animationNames = input<string[]>([]);
+  // Input for model paths
+  public modelPath = input.required<string>();
+  public modelPath2 = input.required<string>();
 
   @ViewChild('modelCanvas') private canvasRef!: ElementRef<HTMLCanvasElement>;
 
@@ -94,8 +97,7 @@ export class ThreeModelViewerComponent implements AfterViewInit, OnDestroy {
   private loader: GLTFLoader;
   private clock: THREE.Clock;
   private mixer: THREE.AnimationMixer | null = null;
-  private model: THREE.Object3D | null = null;
-  private animationsMap: Map<string, THREE.AnimationClip[]> = new Map();
+  private currentModel: THREE.Object3D | null = null;
   private currentAnimation: THREE.AnimationAction | null = null;
   private animationFrameId: number | null = null;
 
@@ -106,7 +108,6 @@ export class ThreeModelViewerComponent implements AfterViewInit, OnDestroy {
 
   ngAfterViewInit() {
     this.initScene();
-    this.loadModelAndAnimations();
   }
 
   private initScene() {
@@ -144,54 +145,41 @@ export class ThreeModelViewerComponent implements AfterViewInit, OnDestroy {
     this.animate();
   }
 
-  private loadModelAndAnimations() {
-    // First load the base model
-    if (this.baseModelPath()) {
+  private cleanupCurrentModel() {
+    if (this.currentModel) {
+      this.scene.remove(this.currentModel);
+      this.currentModel.traverse((object) => {
+        if (object instanceof THREE.Mesh) {
+          object.geometry.dispose();
+          if (Array.isArray(object.material)) {
+            object.material.forEach(m => m.dispose());
+          } else {
+            object.material.dispose();
+          }
+        }
+      });
+    }
+    if (this.currentAnimation) {
+      this.currentAnimation.stop();
+    }
+    if (this.mixer) {
+      this.mixer.stopAllAction();
+    }
+  }
+
+  private loadModel(modelPath: string): Promise<GLTF> {
+    return new Promise((resolve, reject) => {
       this.loader.load(
-        this.baseModelPath(),
+        modelPath,
         (gltf) => {
-          console.log('Base model loaded:', gltf);
-          this.model = gltf.scene;
-          this.centerAndScaleModel(this.model);
-          this.scene.add(this.model);
-          
-          // Create mixer after model is loaded
-          this.mixer = new THREE.AnimationMixer(this.model);
-          
-          // Load animations after model is ready
-          this.loadAnimationFiles();
+          resolve(gltf);
         },
         (progress) => {
           console.log(`Loading model: ${(progress.loaded / progress.total * 100).toFixed(2)}%`);
         },
         (error) => {
           console.error('Error loading model:', error);
-        }
-      );
-    }
-  }
-
-  private loadAnimationFiles() {
-    this.animationFiles().forEach((file, index) => {
-      const animationName = this.animationNames()[index];
-      console.log(`Loading animation: ${animationName} from ${file}`);
-      
-      this.loader.load(
-        file,
-        (gltf) => {
-          if (gltf.animations && gltf.animations.length > 0) {
-            console.log(`Loaded animations for ${animationName}:`, gltf.animations);
-            // Store the animations with their name
-            this.animationsMap.set(animationName, gltf.animations);
-          } else {
-            console.warn(`No animations found in file: ${file}`);
-          }
-        },
-        (progress) => {
-          console.log(`Loading ${animationName}: ${(progress.loaded / progress.total * 100).toFixed(2)}%`);
-        },
-        (error) => {
-          console.error(`Error loading animation ${animationName}:`, error);
+          reject(error);
         }
       );
     });
@@ -211,37 +199,29 @@ export class ThreeModelViewerComponent implements AfterViewInit, OnDestroy {
     }
   }
 
-  playAnimation(index: number) {
-    if (!this.mixer || !this.model) {
-      console.warn('Mixer or model not ready');
-      return;
-    }
+  async loadAndPlayModel(modelNumber: number) {
+    try {
+      // Clean up current model and animation
+      this.cleanupCurrentModel();
 
-    const animationName = this.animationNames()[index];
-    const animations = this.animationsMap.get(animationName);
+      const modelPath = modelNumber === 1 ? this.modelPath() : this.modelPath2();
+      const gltf = await this.loadModel(modelPath);
 
-    console.log(`Attempting to play ${animationName}:`, animations);
+      if (gltf.scene) {
+        this.currentModel = gltf.scene;
+        this.centerAndScaleModel(this.currentModel);
+        this.scene.add(this.currentModel);
 
-    if (animations && animations.length > 0) {
-      // Stop current animation if any
-      if (this.currentAnimation) {
-        this.currentAnimation.stop();
+        if (gltf.animations && gltf.animations.length > 0) {
+          this.mixer = new THREE.AnimationMixer(this.currentModel);
+          this.currentAnimation = this.mixer.clipAction(gltf.animations[0]);
+          this.currentAnimation.reset();
+          this.currentAnimation.setLoop(THREE.LoopRepeat, Infinity); // Added Infinity for continuous loop
+          this.currentAnimation.play();
+        }
       }
-
-      try {
-        // Create and play new animation
-        this.currentAnimation = this.mixer.clipAction(animations[0]);
-        this.currentAnimation.reset();
-        this.currentAnimation.setLoop(THREE.LoopOnce, 1);
-        this.currentAnimation.clampWhenFinished = true;
-        this.currentAnimation.play();
-        
-        console.log(`Started playing animation: ${animationName}`);
-      } catch (error) {
-        console.error('Error playing animation:', error);
-      }
-    } else {
-      console.warn(`No animation found for ${animationName}`);
+    } catch (error) {
+      console.error('Error loading model:', error);
     }
   }
 
@@ -266,20 +246,8 @@ export class ThreeModelViewerComponent implements AfterViewInit, OnDestroy {
       cancelAnimationFrame(this.animationFrameId);
     }
 
-    this.mixer?.stopAllAction();
-    
-    // Clean up resources
-    this.scene?.traverse((object) => {
-      if (object instanceof THREE.Mesh) {
-        object.geometry.dispose();
-        if (Array.isArray(object.material)) {
-          object.material.forEach(m => m.dispose());
-        } else {
-          object.material.dispose();
-        }
-      }
-    });
-    
+    this.cleanupCurrentModel();
+
     this.renderer?.dispose();
     this.controls?.dispose();
   }

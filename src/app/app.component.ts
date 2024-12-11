@@ -7,13 +7,9 @@ import { ThreeModelViewerComponent } from "./three-model-viewer/three-model-view
   imports: [ThreeModelViewerComponent],
   template: `
     <app-three-model-viewer
-      [baseModelPath]="'assets/models/Anatomy.glb'"
-      [animationFiles]="[
-        'assets/models/PushUpAnimation.glb',
-        'assets/models/SquatAnimation.glb'
-      ]"
-      [animationNames]="['PushUp', 'Squat']"
+      [modelPath]="'assets/models/Body Weight Squat.glb'"
+      [modelPath2]="'assets/models/Push up body.glb'"
     ></app-three-model-viewer>
   `
 })
-export class AppComponent {}
+export class AppComponent { }
