@@ -6,7 +6,7 @@ import {
   ViewChild,
   input
 } from '@angular/core';
-import { NgFor } from '@angular/common';
+import { NgFor, NgIf } from '@angular/common';
 import * as THREE from 'three';
 import { GLTFLoader, GLTF } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
@@ -14,73 +14,9 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 @Component({
   selector: 'app-three-model-viewer',
   standalone: true,
-  imports: [NgFor],
-  template: `
-    <div class="model-viewer-container">
-      <canvas #modelCanvas></canvas>
-      <div class="controls">
-        <button 
-          class="control-button"
-          (click)="loadAndPlayModel(1)"
-        >
-          Play Squat Animation
-        </button>
-        <button 
-          class="control-button"
-          (click)="loadAndPlayModel(2)"
-        >
-          Play Push-up Animation
-        </button>
-      </div>
-    </div>
-  `,
-  styles: [`
-    :host {
-      display: block;
-      width: 100vw;
-      height: 100vh;
-      overflow: hidden;
-    }
-
-    .model-viewer-container {
-      position: relative;
-      width: 100%;
-      height: 100%;
-    }
-
-    canvas {
-      width: 100% !important;
-      height: 100% !important;
-      display: block;
-    }
-
-    .controls {
-      position: fixed;
-      bottom: 20px;
-      left: 50%;
-      transform: translateX(-50%);
-      display: flex;
-      gap: 1rem;
-      padding: 1rem;
-      background: rgba(0, 0, 0, 0.5);
-      border-radius: 8px;
-      z-index: 10;
-    }
-
-    .control-button {
-      padding: 0.5rem 1rem;
-      background: #3b82f6;
-      color: white;
-      border: none;
-      border-radius: 4px;
-      cursor: pointer;
-      transition: background-color 0.2s;
-    }
-
-    .control-button:hover {
-      background: #2563eb;
-    }
-  `]
+  imports: [NgFor, NgIf],
+  templateUrl: './three-model-viewer.component.html',
+  styleUrls: ['./three-model-viewer.component.scss']
 })
 export class ThreeModelViewerComponent implements AfterViewInit, OnDestroy {
   // Input for model paths
@@ -88,6 +24,10 @@ export class ThreeModelViewerComponent implements AfterViewInit, OnDestroy {
   public modelPath2 = input.required<string>();
 
   @ViewChild('modelCanvas') private canvasRef!: ElementRef<HTMLCanvasElement>;
+
+  // State properties
+  public isLoading = false;
+  public error: string | null = null;
 
   // Three.js properties
   private scene!: THREE.Scene;
@@ -108,18 +48,21 @@ export class ThreeModelViewerComponent implements AfterViewInit, OnDestroy {
 
   ngAfterViewInit() {
     this.initScene();
+    this.loadInitialModel();
+    window.addEventListener('resize', this.onWindowResize.bind(this));
   }
 
   private initScene() {
     // Create scene
     this.scene = new THREE.Scene();
-    this.scene.background = new THREE.Color(0x1a1a1a);
+    this.scene.background = new THREE.Color(0x2c3e50);
 
     // Setup camera
     const width = window.innerWidth;
     const height = window.innerHeight;
-    this.camera = new THREE.PerspectiveCamera(75, width / height, 0.1, 1000);
-    this.camera.position.z = 5;
+    this.camera = new THREE.PerspectiveCamera(60, width / height, 0.1, 1000);
+    this.camera.position.set(0, 1, 4);
+    this.camera.lookAt(0, 0, 0);
 
     // Setup renderer
     this.renderer = new THREE.WebGLRenderer({
@@ -127,11 +70,18 @@ export class ThreeModelViewerComponent implements AfterViewInit, OnDestroy {
       antialias: true
     });
     this.renderer.setSize(width, height);
-    this.renderer.setPixelRatio(window.devicePixelRatio);
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    this.renderer.shadowMap.enabled = true;
+    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
     // Setup controls
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
     this.controls.enableDamping = true;
+    this.controls.dampingFactor = 0.05;
+    this.controls.screenSpacePanning = false;
+    this.controls.minDistance = 2;
+    this.controls.maxDistance = 10;
+    this.controls.maxPolarAngle = Math.PI / 2;
 
     // Add lights
     const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
@@ -139,31 +89,29 @@ export class ThreeModelViewerComponent implements AfterViewInit, OnDestroy {
 
     const directionalLight = new THREE.DirectionalLight(0xffffff, 1);
     directionalLight.position.set(5, 5, 5);
+    directionalLight.castShadow = true;
+    directionalLight.shadow.mapSize.width = 2048;
+    directionalLight.shadow.mapSize.height = 2048;
     this.scene.add(directionalLight);
+
+    const fillLight = new THREE.DirectionalLight(0xffffff, 0.3);
+    fillLight.position.set(-5, 0, -5);
+    this.scene.add(fillLight);
 
     // Start animation loop
     this.animate();
   }
 
-  private cleanupCurrentModel() {
-    if (this.currentModel) {
-      this.scene.remove(this.currentModel);
-      this.currentModel.traverse((object) => {
-        if (object instanceof THREE.Mesh) {
-          object.geometry.dispose();
-          if (Array.isArray(object.material)) {
-            object.material.forEach(m => m.dispose());
-          } else {
-            object.material.dispose();
-          }
-        }
-      });
-    }
-    if (this.currentAnimation) {
-      this.currentAnimation.stop();
-    }
-    if (this.mixer) {
-      this.mixer.stopAllAction();
+  private async loadInitialModel() {
+    try {
+      const gltf = await this.loadModel(this.modelPath());
+      if (gltf.scene) {
+        this.currentModel = gltf.scene;
+        this.centerAndScaleModel(this.currentModel);
+        this.scene.add(this.currentModel);
+      }
+    } catch (error) {
+      this.handleError('Error loading initial model:', error);
     }
   }
 
@@ -193,15 +141,35 @@ export class ThreeModelViewerComponent implements AfterViewInit, OnDestroy {
     model.position.sub(center);
 
     const maxDim = Math.max(size.x, size.y, size.z);
-    if (maxDim > 2) {
-      const scale = 2 / maxDim;
+    if (maxDim > 0) {
+      const scale = 3 / maxDim;
       model.scale.multiplyScalar(scale);
+    }
+
+    model.position.y -= 1;
+  }
+
+  private onWindowResize() {
+    if (this.camera && this.renderer) {
+      const width = window.innerWidth;
+      const height = window.innerHeight;
+
+      this.camera.aspect = width / height;
+      this.camera.updateProjectionMatrix();
+      this.renderer.setSize(width, height);
     }
   }
 
   async loadAndPlayModel(modelNumber: number) {
+    if (!this.modelPath() || !this.modelPath2()) {
+      this.handleError('Model path is not provided');
+      return;
+    }
+
+    this.isLoading = true;
+    this.error = null;
+
     try {
-      // Clean up current model and animation
       this.cleanupCurrentModel();
 
       const modelPath = modelNumber === 1 ? this.modelPath() : this.modelPath2();
@@ -216,12 +184,41 @@ export class ThreeModelViewerComponent implements AfterViewInit, OnDestroy {
           this.mixer = new THREE.AnimationMixer(this.currentModel);
           this.currentAnimation = this.mixer.clipAction(gltf.animations[0]);
           this.currentAnimation.reset();
-          this.currentAnimation.setLoop(THREE.LoopRepeat, Infinity); // Added Infinity for continuous loop
+          this.currentAnimation.setLoop(THREE.LoopRepeat, Infinity);
           this.currentAnimation.play();
         }
       }
     } catch (error) {
-      console.error('Error loading model:', error);
+      this.handleError('Error loading model:', error);
+    } finally {
+      this.isLoading = false;
+    }
+  }
+
+  private handleError(message: string, error?: any) {
+    console.error(message, error);
+    this.error = `${message}${error ? ': ' + error.message : ''}`;
+  }
+
+  private cleanupCurrentModel() {
+    if (this.currentModel) {
+      this.scene.remove(this.currentModel);
+      this.currentModel.traverse((object) => {
+        if (object instanceof THREE.Mesh) {
+          object.geometry.dispose();
+          if (Array.isArray(object.material)) {
+            object.material.forEach(m => m.dispose());
+          } else {
+            object.material.dispose();
+          }
+        }
+      });
+    }
+    if (this.currentAnimation) {
+      this.currentAnimation.stop();
+    }
+    if (this.mixer) {
+      this.mixer.stopAllAction();
     }
   }
 
@@ -246,8 +243,8 @@ export class ThreeModelViewerComponent implements AfterViewInit, OnDestroy {
       cancelAnimationFrame(this.animationFrameId);
     }
 
+    window.removeEventListener('resize', this.onWindowResize.bind(this));
     this.cleanupCurrentModel();
-
     this.renderer?.dispose();
     this.controls?.dispose();
   }

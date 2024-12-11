@@ -1,13 +1,16 @@
 <div class="model-viewer-container">
-    <canvas #modelCanvas class="w-full h-[500px]"></canvas>
-    <div class="controls mt-4 flex justify-center space-x-4">
-      @for (animation of animationNames(); track $index) {
-        <button 
-          class="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600"
-          (click)="playAnimation($index)"
-        >
-          Play {{ animation }}
-        </button>
-      }
-    </div>
+  <canvas #modelCanvas></canvas>
+  <div class="controls">
+    <button class="control-button" (click)="loadAndPlayModel(1)" [disabled]="isLoading">
+      {{ isLoading ? 'Loading...' : 'Squat Animation' }}
+    </button>
+    <button class="control-button" (click)="loadAndPlayModel(2)" [disabled]="isLoading">
+      {{ isLoading ? 'Loading...' : 'Push-up Animation' }}
+    </button>
   </div>
+  @if (error) {
+  <div class="error-message">
+    {{ error }}
+  </div>
+  }
+</div>
