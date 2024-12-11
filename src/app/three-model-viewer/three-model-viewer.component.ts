@@ -1,4 +1,3 @@
-// three-model-viewer.component.ts
 import { 
   Component, 
   AfterViewInit, 
@@ -18,11 +17,11 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
   imports: [NgFor],
   template: `
     <div class="model-viewer-container">
-      <canvas #modelCanvas class="w-full h-[500px]"></canvas>
-      <div class="controls mt-4 flex justify-center space-x-4">
+      <canvas #modelCanvas></canvas>
+      <div class="controls">
         @for (animation of animationNames(); track $index) {
           <button 
-            class="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600"
+            class="control-button"
             (click)="playAnimation($index)"
           >
             Play {{ animation }}
@@ -32,111 +31,173 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
     </div>
   `,
   styles: [`
+    :host {
+      display: block;
+      width: 100vw;
+      height: 100vh;
+      overflow: hidden;
+    }
+
     .model-viewer-container {
+      position: relative;
       width: 100%;
-      max-width: 800px;
-      margin: 0 auto;
+      height: 100%;
+    }
+
+    canvas {
+      width: 100% !important;
+      height: 100% !important;
+      display: block;
+    }
+
+    .controls {
+      position: fixed;
+      bottom: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      gap: 1rem;
+      padding: 1rem;
+      background: rgba(0, 0, 0, 0.5);
+      border-radius: 8px;
+      z-index: 10;
+    }
+
+    .control-button {
+      padding: 0.5rem 1rem;
+      background: #3b82f6;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      transition: background-color 0.2s;
+    }
+
+    .control-button:hover {
+      background: #2563eb;
     }
   `]
 })
 export class ThreeModelViewerComponent implements AfterViewInit, OnDestroy {
+  // Inputs
   public baseModelPath = input<string>('');
   public animationFiles = input<string[]>([]);
   public animationNames = input<string[]>([]);
 
   @ViewChild('modelCanvas') private canvasRef!: ElementRef<HTMLCanvasElement>;
 
+  // Three.js properties
   private scene!: THREE.Scene;
   private camera!: THREE.PerspectiveCamera;
   private renderer!: THREE.WebGLRenderer;
   private controls!: OrbitControls;
-  private loadedModels: { [key: string]: THREE.Group } = {};
-  private currentModelName: string | null = null;
+  private loader: GLTFLoader;
+  private clock: THREE.Clock;
+  private mixer: THREE.AnimationMixer | null = null;
+  private model: THREE.Object3D | null = null;
+  private animationsMap: Map<string, THREE.AnimationClip[]> = new Map();
+  private currentAnimation: THREE.AnimationAction | null = null;
+  private animationFrameId: number | null = null;
 
   constructor() {
     this.loader = new GLTFLoader();
+    this.clock = new THREE.Clock();
   }
-
-  private loader: GLTFLoader;
 
   ngAfterViewInit() {
     this.initScene();
-    this.loadAllModels();
+    this.loadModelAndAnimations();
   }
 
   private initScene() {
-    if (!this.canvasRef) return;
-
+    // Create scene
     this.scene = new THREE.Scene();
-    this.scene.background = new THREE.Color(0xf0f0f0);
+    this.scene.background = new THREE.Color(0x1a1a1a);
 
-    const canvas = this.canvasRef.nativeElement;
-    const width = canvas.clientWidth;
-    const height = canvas.clientHeight;
-
+    // Setup camera
+    const width = window.innerWidth;
+    const height = window.innerHeight;
     this.camera = new THREE.PerspectiveCamera(75, width / height, 0.1, 1000);
     this.camera.position.z = 5;
 
+    // Setup renderer
     this.renderer = new THREE.WebGLRenderer({
-      canvas: canvas,
+      canvas: this.canvasRef.nativeElement,
       antialias: true
     });
     this.renderer.setSize(width, height);
+    this.renderer.setPixelRatio(window.devicePixelRatio);
 
+    // Setup controls
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
     this.controls.enableDamping = true;
 
+    // Add lights
     const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
     this.scene.add(ambientLight);
 
-    const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+    const directionalLight = new THREE.DirectionalLight(0xffffff, 1);
     directionalLight.position.set(5, 5, 5);
     this.scene.add(directionalLight);
 
+    // Start animation loop
     this.animate();
   }
 
-  private loadAllModels() {
+  private loadModelAndAnimations() {
+    // First load the base model
     if (this.baseModelPath()) {
-      this.loadModel(this.baseModelPath()!, 'base').then(model => {
-        console.log('Base model loaded');
-        this.showModel('base');
-      });
-    }
-
-    this.animationFiles().forEach((file, index) => {
-      const modelName = this.animationNames()[index] || `animation${index}`;
-      this.loadModel(file, modelName).then(() => {
-        console.log(`Loaded animation model: ${modelName}`);
-      });
-    });
-  }
-
-  private loadModel(path: string, modelName: string): Promise<THREE.Group> {
-    return new Promise((resolve, reject) => {
       this.loader.load(
-        path,
+        this.baseModelPath(),
         (gltf) => {
-          gltf.animations.forEach((anim, index) => {
-            console.log(`${index}: ${anim.name}`);
-        });
-          const model = gltf.scene;
-          this.loadedModels[modelName] = model;
-          this.centerAndScaleModel(model);
-          resolve(model);
+          console.log('Base model loaded:', gltf);
+          this.model = gltf.scene;
+          this.centerAndScaleModel(this.model);
+          this.scene.add(this.model);
+          
+          // Create mixer after model is loaded
+          this.mixer = new THREE.AnimationMixer(this.model);
+          
+          // Load animations after model is ready
+          this.loadAnimationFiles();
         },
         (progress) => {
-          console.log(`Loading ${modelName}: ${(progress.loaded / progress.total * 100).toFixed(2)}%`);
+          console.log(`Loading model: ${(progress.loaded / progress.total * 100).toFixed(2)}%`);
         },
         (error) => {
-          console.error(`Error loading ${modelName}:`, error);
-          reject(error);
+          console.error('Error loading model:', error);
+        }
+      );
+    }
+  }
+
+  private loadAnimationFiles() {
+    this.animationFiles().forEach((file, index) => {
+      const animationName = this.animationNames()[index];
+      console.log(`Loading animation: ${animationName} from ${file}`);
+      
+      this.loader.load(
+        file,
+        (gltf) => {
+          if (gltf.animations && gltf.animations.length > 0) {
+            console.log(`Loaded animations for ${animationName}:`, gltf.animations);
+            // Store the animations with their name
+            this.animationsMap.set(animationName, gltf.animations);
+          } else {
+            console.warn(`No animations found in file: ${file}`);
+          }
+        },
+        (progress) => {
+          console.log(`Loading ${animationName}: ${(progress.loaded / progress.total * 100).toFixed(2)}%`);
+        },
+        (error) => {
+          console.error(`Error loading animation ${animationName}:`, error);
         }
       );
     });
   }
 
-  private centerAndScaleModel(model: THREE.Group) {
+  private centerAndScaleModel(model: THREE.Object3D) {
     const box = new THREE.Box3().setFromObject(model);
     const center = box.getCenter(new THREE.Vector3());
     const size = box.getSize(new THREE.Vector3());
@@ -150,48 +211,76 @@ export class ThreeModelViewerComponent implements AfterViewInit, OnDestroy {
     }
   }
 
-  private showModel(modelName: string) {
-    if (this.currentModelName && this.loadedModels[this.currentModelName]) {
-      this.scene.remove(this.loadedModels[this.currentModelName]);
-    }
-
-    const model = this.loadedModels[modelName];
-    if (model) {;
-      this.scene.add(model);
-      this.currentModelName = modelName;
-    }
-  }
-
   playAnimation(index: number) {
-    debugger
-    const modelName = this.animationNames()[index];
-    if (modelName && this.loadedModels[modelName]) {
-      this.showModel(modelName);
+    if (!this.mixer || !this.model) {
+      console.warn('Mixer or model not ready');
+      return;
+    }
+
+    const animationName = this.animationNames()[index];
+    const animations = this.animationsMap.get(animationName);
+
+    console.log(`Attempting to play ${animationName}:`, animations);
+
+    if (animations && animations.length > 0) {
+      // Stop current animation if any
+      if (this.currentAnimation) {
+        this.currentAnimation.stop();
+      }
+
+      try {
+        // Create and play new animation
+        this.currentAnimation = this.mixer.clipAction(animations[0]);
+        this.currentAnimation.reset();
+        this.currentAnimation.setLoop(THREE.LoopOnce, 1);
+        this.currentAnimation.clampWhenFinished = true;
+        this.currentAnimation.play();
+        
+        console.log(`Started playing animation: ${animationName}`);
+      } catch (error) {
+        console.error('Error playing animation:', error);
+      }
+    } else {
+      console.warn(`No animation found for ${animationName}`);
     }
   }
 
   private animate() {
-    if (!this.renderer || !this.scene || !this.camera) return;
-    
-    requestAnimationFrame(() => this.animate());
-    this.controls?.update();
+    this.animationFrameId = requestAnimationFrame(() => this.animate());
+
+    // Update controls
+    this.controls.update();
+
+    // Update animations
+    if (this.mixer) {
+      const delta = this.clock.getDelta();
+      this.mixer.update(delta);
+    }
+
+    // Render scene
     this.renderer.render(this.scene, this.camera);
   }
 
   ngOnDestroy() {
-    this.renderer?.dispose();
-    // Clean up other resources
-    Object.values(this.loadedModels).forEach(model => {
-      model.traverse((object) => {
-        if (object instanceof THREE.Mesh) {
-          object.geometry.dispose();
-          if (Array.isArray(object.material)) {
-            object.material.forEach(material => material.dispose());
-          } else {
-            object.material.dispose();
-          }
+    if (this.animationFrameId !== null) {
+      cancelAnimationFrame(this.animationFrameId);
+    }
+
+    this.mixer?.stopAllAction();
+    
+    // Clean up resources
+    this.scene?.traverse((object) => {
+      if (object instanceof THREE.Mesh) {
+        object.geometry.dispose();
+        if (Array.isArray(object.material)) {
+          object.material.forEach(m => m.dispose());
+        } else {
+          object.material.dispose();
         }
-      });
+      }
     });
+    
+    this.renderer?.dispose();
+    this.controls?.dispose();
   }
 }
